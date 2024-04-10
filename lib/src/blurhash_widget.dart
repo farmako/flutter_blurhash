@@ -24,6 +24,7 @@ class BlurHash extends StatefulWidget {
     this.httpHeaders = const {},
     this.curve = Curves.easeOut,
     this.errorBuilder,
+    this.defaultBgColor = Colors.white,
   })  : assert(decodingWidth > 0),
         assert(decodingHeight != 0),
         super(key: key);
@@ -67,6 +68,9 @@ class BlurHash extends StatefulWidget {
 
   /// Network image errorBuilder
   final ImageErrorWidgetBuilder? errorBuilder;
+
+  /// Background color for the default background
+  final Color defaultBgColor;
 
   @override
   BlurHashState createState() => BlurHashState();
@@ -115,16 +119,17 @@ class BlurHashState extends State<BlurHash> {
         alignment: Alignment.center,
         children: [
           ValueListenableBuilder<bool>(
-              valueListenable: loaded,
-              builder: (context, loaded, _) {
-                return loaded ? _defaultBg() : buildBlurHashBackground();
-              }),
+            valueListenable: loaded,
+            builder: (context, loaded, _) {
+              return loaded ? _defaultBg() : buildBlurHashBackground();
+            },
+          ),
           if (widget.image != null) prepareDisplayedImage(widget.image!),
         ],
       );
 
   Widget _defaultBg() => Container(
-        color: widget.color,
+        color: widget.defaultBgColor,
         height: MediaQuery.of(context).size.height,
         width: MediaQuery.of(context).size.width,
       );
