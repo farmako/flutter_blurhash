@@ -29,7 +29,7 @@ class BlurHashImage extends ImageProvider<BlurHashImage> {
   Future<BlurHashImage> obtainKey(ImageConfiguration configuration) => SynchronousFuture<BlurHashImage>(this);
 
   @override
-  ImageStreamCompleter load(BlurHashImage key, DecoderCallback decode) => OneFrameImageStreamCompleter(_loadAsync(key));
+  ImageStreamCompleter loadImage(BlurHashImage key, ImageDecoderCallback _) => OneFrameImageStreamCompleter(_loadAsync(key));
 
   Future<ImageInfo> _loadAsync(BlurHashImage key) async {
     assert(key == this);
