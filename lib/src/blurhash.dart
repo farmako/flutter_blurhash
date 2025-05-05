@@ -1,9 +1,160 @@
 import 'dart:async';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+
+/// Optimization modes for BlurHash decoder
+enum BlurHashOptimizationMode {
+  /// Original algorithm
+  none,
+
+  /// Optimized with better cache locality
+  standard,
+
+  /// Approximation with faster sRGB conversion + cache locality
+  approximation
+}
+
+// Optimized BlurHash decode implementation
+Future<Uint8List> optimizedBlurHashDecode({
+  required String blurHash,
+  required int width,
+  required int height,
+  double punch = 1.0,
+  BlurHashOptimizationMode optimizationMode = BlurHashOptimizationMode.standard,
+}) {
+  _validateBlurHash(blurHash);
+
+  final sizeFlag = _decode83(blurHash[0]);
+  final numY = (sizeFlag / 9).floor() + 1;
+  final numX = (sizeFlag % 9) + 1;
+
+  final quantisedMaximumValue = _decode83(blurHash[1]);
+  final maximumValue = (quantisedMaximumValue + 1) / 166;
+
+  // Preallocate colors array with fixed size
+  final colors = List<List<double>>.filled(numX * numY, [0, 0, 0]);
+
+  // Decode DC component (first component)
+  final dcValue = _decode83(blurHash.substring(2, 6));
+  colors[0] = _decodeDC(dcValue);
+
+  // Decode AC components (remaining components)
+  final adjustedPunch = maximumValue * punch;
+  for (var i = 1; i < colors.length; i++) {
+    final value = _decode83(blurHash.substring(4 + i * 2, 6 + i * 2));
+    colors[i] = _decodeAC(value, adjustedPunch);
+  }
+
+  // Precalculate cosine values for x and y
+  final cosinesX = List<List<double>>.generate(
+    numX,
+    (i) => List<double>.generate(
+      width,
+      (x) => cos((pi * x * i) / width),
+    ),
+  );
+
+  final cosinesY = List<List<double>>.generate(
+    numY,
+    (j) => List<double>.generate(
+      height,
+      (y) => cos((pi * y * j) / height),
+    ),
+  );
+
+  final bytesPerRow = width * 4;
+  final pixels = Uint8List(bytesPerRow * height);
+
+  // Process image in chunks to improve cache locality
+  const chunkSize = 32;
+
+  // Process the image in tiles for better cache performance
+  for (int yChunk = 0; yChunk < height; yChunk += chunkSize) {
+    final yEnd = min(yChunk + chunkSize, height);
+
+    for (int xChunk = 0; xChunk < width; xChunk += chunkSize) {
+      final xEnd = min(xChunk + chunkSize, width);
+
+      for (int y = yChunk; y < yEnd; y++) {
+        int p = (y * width + xChunk) * 4;
+
+        for (int x = xChunk; x < xEnd; x++) {
+          var r = 0.0, g = 0.0, b = 0.0;
+
+          // Use precalculated cosine values
+          for (int j = 0; j < numY; j++) {
+            final cosY = cosinesY[j][y];
+
+            for (int i = 0; i < numX; i++) {
+              final basis = cosinesX[i][x] * cosY;
+              final color = colors[i + j * numX];
+
+              r += color[0] * basis;
+              g += color[1] * basis;
+              b += color[2] * basis;
+            }
+          }
+
+          // Convert linear RGB to sRGB space based on optimization mode
+          switch (optimizationMode) {
+            case BlurHashOptimizationMode.approximation:
+              pixels[p++] = _approximatedLinearTosRGB(r);
+              pixels[p++] = _approximatedLinearTosRGB(g);
+              pixels[p++] = _approximatedLinearTosRGB(b);
+              break;
+            case BlurHashOptimizationMode.standard:
+            case BlurHashOptimizationMode.none:
+              pixels[p++] = _linearTosRGB(r);
+              pixels[p++] = _linearTosRGB(g);
+              pixels[p++] = _linearTosRGB(b);
+              break;
+          }
+
+          pixels[p++] = 255; // Alpha is always 255
+        }
+      }
+    }
+  }
+
+  return Future.value(pixels);
+}
+
+// Create this once as a static variable
+final List<double> _sRGBLookupTable = _createSRGBLookupTable(256);
+
+List<double> _createSRGBLookupTable(int size) {
+  final table = List<double>.filled(size, 0);
+  for (int i = 0; i < size; i++) {
+    final v = i / (size - 1);
+    if (v <= 0.0031308) {
+      table[i] = v * 12.92;
+    } else {
+      table[i] = 1.055 * pow(v, 1 / 2.4) - 0.055;
+    }
+  }
+  return table;
+}
+
+int _approximatedLinearTosRGB(double value) {
+  final v = max(0.0, min(1.0, value));
+
+  // Find the closest indices in the lookup table
+  final pos = v * (_sRGBLookupTable.length - 1);
+  final idx = pos.floor();
+  final fract = pos - idx;
+
+  // Edge case for the maximum value
+  if (idx >= _sRGBLookupTable.length - 1) {
+    return (_sRGBLookupTable[_sRGBLookupTable.length - 1] * 255 + 0.5).toInt();
+  }
+
+  // Linear interpolation between the two closest values
+  final result =
+      _sRGBLookupTable[idx] * (1 - fract) + _sRGBLookupTable[idx + 1] * fract;
+  return (result * 255 + 0.5).toInt();
+}
 
 Future<Uint8List> blurHashDecode({
   required String blurHash,
@@ -71,19 +222,35 @@ Future<ui.Image> blurHashDecodeImage({
   required int width,
   required int height,
   double punch = 1.0,
+  BlurHashOptimizationMode optimizationMode = BlurHashOptimizationMode.standard,
 }) async {
   _validateBlurHash(blurHash);
 
   final completer = Completer<ui.Image>();
 
+  final Uint8List pixels;
+  if (optimizationMode != BlurHashOptimizationMode.none) {
+    pixels = await optimizedBlurHashDecode(
+      blurHash: blurHash,
+      width: width,
+      height: height,
+      punch: punch,
+      optimizationMode: optimizationMode,
+    );
+  } else {
+    pixels = await blurHashDecode(
+      blurHash: blurHash,
+      width: width,
+      height: height,
+      punch: punch,
+    );
+  }
+
   if (kIsWeb) {
-    // https://github.com/flutter/flutter/issues/45190
-    final pixels = await blurHashDecode(blurHash: blurHash, width: width, height: height, punch: punch);
     completer.complete(_createBmp(pixels, width, height));
   } else {
-    blurHashDecode(blurHash: blurHash, width: width, height: height, punch: punch).then((pixels) {
-      ui.decodeImageFromPixels(pixels, width, height, ui.PixelFormat.rgba8888, completer.complete);
-    });
+    ui.decodeImageFromPixels(
+        pixels, width, height, ui.PixelFormat.rgba8888, completer.complete);
   }
 
   return completer.future;
@@ -142,7 +309,8 @@ void _validateBlurHash(String blurHash) {
   final numX = (sizeFlag % 9) + 1;
 
   if (blurHash.length != 4 + 2 * numX * numY) {
-    throw Exception('blurhash length mismatch: length is ${blurHash.length} but '
+    throw Exception(
+        'blurhash length mismatch: length is ${blurHash.length} but '
         'it should be ${4 + 2 * numX * numY}');
   }
 }
@@ -198,31 +366,13 @@ bool validateBlurhash(String blurhash) {
   final x = (sizeFlag % 9) + 1;
 
   if (blurhash.length != 4 + 2 * x * y) {
-    debugPrint("blurhash length mismatch: length is ${blurhash.length} but it should be ${4 + 2 * x * y}");
+    debugPrint(
+        "blurhash length mismatch: length is ${blurhash.length} but it should be ${4 + 2 * x * y}");
     return false;
   }
 
   return true;
 }
 
-const _digitCharacters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#\$%*+,-.:;=?@[]^_{|}~";
-
-class Style {
-  final String name;
-  final List<ui.Color> colors;
-  final ui.Color? stroke;
-  final ui.Color? background;
-
-  const Style({required this.name, required this.colors, this.stroke, this.background});
-}
-
-const styles = {
-  'flourish': [
-    Style(
-      name: 'one',
-      colors: [],
-      stroke: null,
-      background: null,
-    )
-  ]
-};
+const _digitCharacters =
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#\$%*+,-.:;=?@[]^_{|}~";

@@ -6,7 +6,8 @@ import 'package:flutter_blurhash/flutter_blurhash.dart';
 
 const _DEFAULT_SIZE = 32;
 
-/// Display a Hash then fade to Image
+/// Displays the blurhash [hash] and the fades into the [image] over the course
+/// of [duration].
 class BlurHash extends StatefulWidget {
   const BlurHash({
     required this.hash,
@@ -24,7 +25,7 @@ class BlurHash extends StatefulWidget {
     this.httpHeaders = const {},
     this.curve = Curves.easeOut,
     this.errorBuilder,
-    this.defaultBgColor = Colors.white,
+    this.optimizationMode = BlurHashOptimizationMode.none,
   })  : assert(decodingWidth > 0),
         assert(decodingHeight != 0),
         super(key: key);
@@ -32,7 +33,7 @@ class BlurHash extends StatefulWidget {
   /// Callback when hash is decoded
   final VoidCallback? onDecoded;
 
-  /// Callback when hash is decoded
+  /// Callback when hash is displayed.
   final VoidCallback? onDisplayed;
 
   /// Callback when image is downloaded
@@ -69,8 +70,8 @@ class BlurHash extends StatefulWidget {
   /// Network image errorBuilder
   final ImageErrorWidgetBuilder? errorBuilder;
 
-  /// Background color for the default background
-  final Color defaultBgColor;
+  /// The optimization mode to use for decoding
+  final BlurHashOptimizationMode optimizationMode;
 
   @override
   BlurHashState createState() => BlurHashState();
@@ -78,7 +79,7 @@ class BlurHash extends StatefulWidget {
 
 class BlurHashState extends State<BlurHash> {
   late Future<ui.Image> _image;
-  ValueNotifier<bool> loaded = ValueNotifier(false);
+  late bool loaded;
   late bool loading;
 
   @override
@@ -89,6 +90,7 @@ class BlurHashState extends State<BlurHash> {
 
   void _init() {
     _decodeImage();
+    loaded = false;
     loading = false;
   }
 
@@ -98,7 +100,8 @@ class BlurHashState extends State<BlurHash> {
     if (widget.hash != oldWidget.hash ||
         widget.image != oldWidget.image ||
         widget.decodingWidth != oldWidget.decodingWidth ||
-        widget.decodingHeight != oldWidget.decodingHeight) {
+        widget.decodingHeight != oldWidget.decodingHeight ||
+        widget.optimizationMode != oldWidget.optimizationMode) {
       _init();
     }
   }
@@ -108,6 +111,7 @@ class BlurHashState extends State<BlurHash> {
       blurHash: widget.hash,
       width: widget.decodingWidth,
       height: widget.decodingHeight,
+      optimizationMode: widget.optimizationMode,
     );
 
     _image.whenComplete(() => widget.onDecoded?.call());
@@ -118,20 +122,9 @@ class BlurHashState extends State<BlurHash> {
         fit: StackFit.expand,
         alignment: Alignment.center,
         children: [
-          ValueListenableBuilder<bool>(
-            valueListenable: loaded,
-            builder: (context, loaded, _) {
-              return loaded ? _defaultBg() : buildBlurHashBackground();
-            },
-          ),
+          buildBlurHashBackground(),
           if (widget.image != null) prepareDisplayedImage(widget.image!),
         ],
-      );
-
-  Widget _defaultBg() => Container(
-        color: widget.defaultBgColor,
-        height: MediaQuery.of(context).size.height,
-        width: MediaQuery.of(context).size.width,
       );
 
   Widget prepareDisplayedImage(String image) => Image.network(
@@ -148,8 +141,8 @@ class BlurHashState extends State<BlurHash> {
 
           if (loadingProgress == null) {
             // Image is now loaded, trigger the event
-
-            _onReady();
+            loaded = true;
+            widget.onReady?.call();
             return _DisplayImage(
               child: img,
               duration: widget.duration,
@@ -162,21 +155,12 @@ class BlurHashState extends State<BlurHash> {
         },
       );
 
-  void _onReady() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      loaded.value = true;
-    });
-    widget.onReady?.call();
-  }
-
   /// Decode the blurhash then display the resulting Image
   Widget buildBlurHashBackground() => FutureBuilder<ui.Image>(
         future: _image,
         builder: (ctx, snap) => snap.hasData
             ? Image(image: UiImage(snap.data!), fit: widget.imageFit)
-            : Container(
-                color: widget.color,
-              ),
+            : Container(color: widget.color),
       );
 }
 
@@ -241,7 +225,7 @@ class UiImage extends ImageProvider<UiImage> {
       SynchronousFuture<UiImage>(this);
 
   @override
-  ImageStreamCompleter loadImage(UiImage key, ImageDecoderCallback _) =>
+  ImageStreamCompleter loadImage(UiImage key, ImageDecoderCallback decode) =>
       OneFrameImageStreamCompleter(_loadAsync(key));
 
   Future<ImageInfo> _loadAsync(UiImage key) async {
@@ -250,14 +234,13 @@ class UiImage extends ImageProvider<UiImage> {
   }
 
   @override
-  bool operator ==(dynamic other) {
+  bool operator ==(Object other) {
     if (other.runtimeType != runtimeType) return false;
-    final UiImage typedOther = other;
-    return image == typedOther.image && scale == typedOther.scale;
+    return other is UiImage && other.image == image && other.scale == scale;
   }
 
   @override
-  int get hashCode => hashValues(image.hashCode, scale);
+  int get hashCode => Object.hash(image.hashCode, scale);
 
   @override
   String toString() =>

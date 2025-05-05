@@ -1,3 +1,19 @@
+# 0.9.1
+
+- Corrections
+
+# 0.9.0
+
+- Performance by Raouf Rahiche
+
+# 0.8.1
+
+- Code review
+
+# 0.8.0
+
+- Flutter 3.0 as min required version
+
 # 0.7.0
 
 - Add validateBlurhash() method
