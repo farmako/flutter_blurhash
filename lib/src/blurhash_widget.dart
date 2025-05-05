@@ -257,7 +257,7 @@ class UiImage extends ImageProvider<UiImage> {
   }
 
   @override
-  int get hashCode => hashValues(image.hashCode, scale);
+  int get hashCode => Object.hash(image.hashCode, scale);
 
   @override
   String toString() =>
