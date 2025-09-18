@@ -257,9 +257,6 @@ class UiImage extends ImageProvider<UiImage> {
   }
 
   @override
-  int get hashCode => hashValues(image.hashCode, scale);
-
-  @override
   String toString() =>
       '$runtimeType(${describeIdentity(image)}, scale: $scale)';
 }
